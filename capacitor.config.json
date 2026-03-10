@@ -1,0 +1,50 @@
+{
+  "appId": "com.swach.anime",
+  "appName": "Swach",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "allowNavigation": [
+      "graphql.anilist.co",
+      "anilist.co",
+      "*.onrender.com",
+      "*.workers.dev",
+      "*.pages.dev",
+      "*.vercel.app",
+      "vidsrc.me",
+      "*.vidsrc.me",
+      "2embed.cc",
+      "*.2embed.cc",
+      "*.hianime.to",
+      "*.gogoanime.*"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false,
+    "backgroundColor": "#000000"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "launchAutoHide": true,
+      "backgroundColor": "#000000",
+      "androidSplashResourceName": "splash",
+      "androidScaleType": "CENTER_CROP",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true,
+      "fadeOutDuration": 300
+    },
+    "StatusBar": {
+      "style": "dark",
+      "backgroundColor": "#000000",
+      "overlaysWebView": false
+    },
+    "Keyboard": {
+      "resize": "body",
+      "resizeOnFullScreen": true
+    }
+  }
+}
