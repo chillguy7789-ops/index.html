@@ -4465,8 +4465,8 @@ async function importAniList(){
         if(progFill) progFill.style.width=`${(imported/Math.max(total,1))*100}%`;
       }
     }
-    S.favorites=S.favorites.slice(0,200);
-    S.history=S.history.slice(0,50);
+    S.favorites=S.favorites.slice(0,500);
+    S.history=S.history.slice(0,500);
     setLS('aniFavs',S.favorites);
     setLS('aniHistory',S.history);
     toast(`✓ Imported ${imported} anime from AniList`,'ok');
@@ -4488,9 +4488,11 @@ function handleMalDrop(e){
 function parseMalXML(file){
   if(!file){return;}
   const status=document.getElementById('mal-status');
+  const progBar=document.getElementById('mal-prog');
+  const progFill=document.getElementById('mal-prog-fill');
   if(status) status.textContent='Reading file...';
   const reader=new FileReader();
-  reader.onload=async(e)=>{
+  reader.onload=(e)=>{
     try{
       const xml=new DOMParser().parseFromString(e.target.result,'text/xml');
       const animes=Array.from(xml.querySelectorAll('anime'));
@@ -4498,47 +4500,68 @@ function parseMalXML(file){
         if(status) status.textContent='No anime found in file. Check the format.';
         return;
       }
-      if(status) status.textContent=`Found ${animes.length} anime. Resolving IDs...`;
-      if(_importMode==='replace'){S.favorites=[];S.history=[];setLS('aniFavs',[]);setLS('aniHistory',[]);}
-      let imported=0,failed=0;
-      // MAL doesn't include AniList IDs, so we search by title for the first batch
-      // Import into history/favs by title for now — resolved on first watch
-      for(const node of animes){
-        const title=node.querySelector('series_title')?.textContent||'';
-        const malStatus=node.querySelector('my_status')?.textContent||'';
-        const progress=parseInt(node.querySelector('my_watched_episodes')?.textContent||'0');
-        const score=parseFloat(node.querySelector('my_score')?.textContent||'0');
-        // Store as pending import (will resolve AniList ID on search)
-        S._malPending=S._malPending||[];
-        S._malPending.push({title,status:malStatus,progress,score});
-        imported++;
-      }
-      setLS('aniMalPending',S._malPending);
-      // Resolve all entries
-      if(status) status.textContent=`Resolving ${imported} entries...`;
-      let resolved=0;
-      for(const item of (S._malPending||[])){
-        try{
-          const results=await searchAL(item.title,1,1);
-          if(results?.[0]){
-            const a=results[0];
-            if(['Watching','Completed','On-Hold'].includes(item.status)){
-              if(!S.favorites.find(f=>f.id===a.id)) S.favorites.push({id:a.id,title:T(a),cover:cover(a),ts:Date.now()});
+      const items=animes.map(node=>({
+        title:node.querySelector('series_title')?.textContent||'',
+        malId:parseInt(node.querySelector('series_animedb_id')?.textContent||'0'),
+        malStatus:node.querySelector('my_status')?.textContent||'',
+        progress:parseInt(node.querySelector('my_watched_episodes')?.textContent||'0'),
+        score:parseFloat(node.querySelector('my_score')?.textContent||'0'),
+      })).filter(x=>x.title);
+      if(progBar) progBar.style.display='block';
+      if(progFill) progFill.style.width='0%';
+      if(status) status.textContent=`Found ${items.length} entries — importing in background...`;
+      toast(`Starting import of ${items.length} anime...`,'info');
+      // Run entirely in background — never blocks UI
+      (async()=>{
+        if(_importMode==='replace'){S.favorites=[];S.history=[];setLS('aniFavs',[]);setLS('aniHistory',[]);}
+        let resolved=0; const total=items.length;
+        // Batch MAL IDs via AniList idMal_in (50 at a time) — much faster than title search
+        const malIds=items.filter(x=>x.malId>0).map(x=>x.malId);
+        const malMap={}; // malId -> alEntry
+        for(let b=0;b<malIds.length;b+=50){
+          const batch=malIds.slice(b,b+50);
+          try{
+            const q=`query($ids:[Int]){Page(perPage:50){media(idMal_in:$ids,type:ANIME){id idMal title{userPreferred}coverImage{large}episodes averageScore format seasonYear}}}`;
+            const r=await fetch('https://graphql.anilist.co',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({query:q,variables:{ids:batch}})});
+            const d=await r.json();
+            for(const m of (d.data?.Page?.media||[])) malMap[m.idMal]=m;
+          }catch{}
+          await new Promise(r=>setTimeout(r,600));
+        }
+        // Process each item
+        for(let idx=0;idx<items.length;idx++){
+          const item=items[idx];
+          try{
+            let a=item.malId>0?malMap[item.malId]:null;
+            if(!a){
+              // Title search fallback for entries without MAL id
+              const res=await searchAL(item.title,1,1);
+              a=res?.[0]||null;
+              await new Promise(r=>setTimeout(r,250));
             }
-            if(item.progress>0&&!S.history.find(h=>h.id===a.id)){
-              S.history.push({id:a.id,ep:item.progress,ts:Date.now()-resolved*500,title:T(a),cover:cover(a),total:a.episodes||0});
+            if(a){
+              const st=item.malStatus;
+              if(['Watching','Completed','On-Hold','Plan to Watch','Dropped'].includes(st)){
+                if(!S.favorites.find(f=>f.id===a.id)) S.favorites.push({id:a.id,title:a.title?.userPreferred||item.title,cover:a.coverImage?.large||'',ts:Date.now()});
+              }
+              if(item.progress>0&&!S.history.find(h=>h.id===a.id)){
+                S.history.push({id:a.id,ep:item.progress,ts:Date.now(),title:a.title?.userPreferred||item.title,cover:a.coverImage?.large||'',total:a.episodes||0});
+              }
+              resolved++;
             }
-            resolved++;
-          }
-        }catch{}
-        await new Promise(r=>setTimeout(r,300)); // rate limit
-      }
-      S.favorites=S.favorites.slice(0,500);
-      S.history=S.history.slice(0,500);
-      setLS('aniFavs',S.favorites);
-      setLS('aniHistory',S.history);
-      if(status) status.textContent=`✓ Imported ${resolved} / ${imported} anime from MAL`;
-      toast(`✓ Imported ${resolved} anime from MAL`,'ok');
+          }catch{}
+          const pct=Math.round(((idx+1)/total)*100);
+          if(progFill) progFill.style.width=pct+'%';
+          if(status) status.textContent=`Importing ${idx+1} / ${total} — ${resolved} resolved...`;
+        }
+        S.favorites=S.favorites.slice(0,500);
+        S.history=S.history.slice(0,500);
+        setLS('aniFavs',S.favorites);
+        setLS('aniHistory',S.history);
+        if(progFill) progFill.style.width='100%';
+        if(status) status.textContent=`✓ Done — imported ${resolved} of ${total} anime`;
+        toast(`✓ Imported ${resolved} from MAL`,'ok');
+      })();
     }catch(err){
       if(status) status.textContent='Error: '+err.message;
       toast('MAL import failed','err');
@@ -4758,85 +4781,111 @@ function _parseBackupProto(bytes){
 
 async function _importTachiJson(data, status){
   if(_importMode==='replace'){S.favorites=[];S.history=[];setLS('aniFavs',[]);setLS('aniHistory',[]);}
-
-  // Prefer anime entries; fall back to manga
   const entries=(data.backupAnime||[]).concat(data.backupManga||data.mangas||data.animes||[]);
   if(!entries.length) throw new Error('No entries found in this backup.');
-
-  let resolved=0;
   const total=entries.length;
-  if(status) status.textContent=`Found ${total} entries. Searching AniList...`;
-
-  for(const entry of entries){
-    const title=entry.title||entry.anime?.title||entry.manga?.title||'';
-    const thumb=entry.thumbnailUrl||entry.anime?.thumbnailUrl||entry.manga?.thumbnailUrl||'';
-
-    // syncId values: 1=MAL, 2=AniList, 3=Kitsu
-    const alTracking=(entry.tracking||[]).find(t=>t.syncId===2);
-    const malTracking=(entry.tracking||[]).find(t=>t.syncId===1);
-
-    if(!title && !alTracking && !malTracking) continue;
-
-    try{
-      let alEntry=null;
-      let progress=0;
-
-      if(alTracking?.mediaId){
-        // Fast path — AniList ID directly from tracking
-        const bulk=await getByIdsBulk([alTracking.mediaId]);
-        alEntry=bulk?.[0]||null;
-        progress=Math.round(alTracking.lastEpisodeSeen||0);
-      }
-
-      if(!alEntry && malTracking?.mediaId){
-        // MAL ID — resolve via AniList idMal lookup
-        try{
-          const r=await fetch('https://graphql.anilist.co',{method:'POST',
-            headers:{'Content-Type':'application/json','Accept':'application/json'},
-            body:JSON.stringify({query:`query($id:Int){Media(idMal:$id,type:ANIME){id title{userPreferred}coverImage{large}episodes averageScore format seasonYear}}`,variables:{id:malTracking.mediaId}})});
-          const d=await r.json();
-          alEntry=d.data?.Media||null;
-          if(alEntry) progress=Math.round(malTracking.lastEpisodeSeen||0);
-        }catch{}
-      }
-
-      if(!alEntry && title){
-        // Title search fallback (only path for Tachiyomi-MI which has no tracking)
-        const results=await searchAL(title,1,1);
-        alEntry=results?.[0]||null;
-        if(alEntry) progress=entry.episodeCount||0;
-      }
-
-      if(alEntry){
-        if(!isFav(alEntry.id)){
-          S.favorites.push({id:alEntry.id,title:T(alEntry),cover:cover(alEntry),ts:Date.now()});
-        }
-        if(progress>0 && !S.history.find(h=>h.id===alEntry.id)){
-          S.history.push({id:alEntry.id,ep:progress,ts:Date.now(),title:T(alEntry),cover:cover(alEntry),total:alEntry.episodes||0});
-        }
-        // Push to AniList if logged in and not already there
-        if(S.alToken && !S.alListCache[alEntry.id]){
-          const rawStatus=(alTracking?.status||malTracking?.status||0);
-          const alStatus={1:'CURRENT',2:'COMPLETED',3:'PAUSED',4:'DROPPED',5:'PLANNING',6:'PLANNING'}[rawStatus]||'PLANNING';
-          syncToAL(alEntry.id,alStatus,progress).catch(()=>{});
-        }
-        resolved++;
-        if(status) status.textContent=`Resolved ${resolved} / ${total}...`;
-      }
-    }catch(e){console.warn('[Tachi import]',title,e.message);}
-
-    await new Promise(r=>setTimeout(r,300)); // AniList rate limit
+  // Find or create progress bar in tachi-status area
+  let progBar=document.getElementById('tachi-prog');
+  let progFill=document.getElementById('tachi-prog-fill');
+  if(!progBar){
+    progBar=document.createElement('div');
+    progBar.id='tachi-prog';
+    progBar.className='prog-bar';
+    progFill=document.createElement('div');
+    progFill.id='tachi-prog-fill';
+    progFill.className='prog-fill';
+    progFill.style.width='0%';
+    progBar.appendChild(progFill);
+    status?.parentNode?.insertBefore(progBar,status.nextSibling);
   }
-
-  S.favorites=S.favorites.slice(0,200);
-  S.history=S.history.slice(0,50);
-  setLS('aniFavs',S.favorites);
-  setLS('aniHistory',S.history);
-  if(status) status.textContent=`\u2713 Done \u2014 imported ${resolved} of ${total} entries.`;
-  toast(`Imported ${resolved} from Aniyomi backup`,'ok');
+  progBar.style.display='block';
+  if(status) status.textContent=`Found ${total} entries — importing in background...`;
+  toast(`Starting import of ${total} anime...`,'info');
+  // Run in background
+  (async()=>{
+    let resolved=0;
+    // Collect all AniList IDs and MAL IDs for bulk fetching
+    const alIds=[],malIds=[];
+    for(const e of entries){
+      const alT=(e.tracking||[]).find(t=>t.syncId===2);
+      const malT=(e.tracking||[]).find(t=>t.syncId===1);
+      if(alT?.mediaId) alIds.push(alT.mediaId);
+      else if(malT?.mediaId) malIds.push(malT.mediaId);
+    }
+    // Bulk fetch AniList IDs (50 at a time)
+    const alMap={};
+    for(let b=0;b<alIds.length;b+=50){
+      try{
+        const batch=alIds.slice(b,b+50);
+        const res=await getByIdsBulk(batch);
+        for(const m of (res||[])) alMap[m.id]=m;
+      }catch{}
+      await new Promise(r=>setTimeout(r,600));
+    }
+    // Bulk fetch MAL IDs via idMal_in
+    const malMap={};
+    for(let b=0;b<malIds.length;b+=50){
+      try{
+        const batch=malIds.slice(b,b+50);
+        const q=`query($ids:[Int]){Page(perPage:50){media(idMal_in:$ids,type:ANIME){id idMal title{userPreferred}coverImage{large}episodes averageScore format seasonYear}}}`;
+        const r=await fetch('https://graphql.anilist.co',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},body:JSON.stringify({query:q,variables:{ids:batch}})});
+        const d=await r.json();
+        for(const m of (d.data?.Page?.media||[])) malMap[m.idMal]=m;
+      }catch{}
+      await new Promise(r=>setTimeout(r,600));
+    }
+    // Process entries
+    for(let idx=0;idx<entries.length;idx++){
+      const entry=entries[idx];
+      const title=entry.title||'';
+      const alT=(entry.tracking||[]).find(t=>t.syncId===2);
+      const malT=(entry.tracking||[]).find(t=>t.syncId===1);
+      if(!title && !alT && !malT){
+        const pct=Math.round(((idx+1)/total)*100);
+        if(progFill) progFill.style.width=pct+'%';
+        continue;
+      }
+      try{
+        let alEntry=alT?.mediaId?alMap[alT.mediaId]:null;
+        let progress=alT?.mediaId?Math.round(alT.lastEpisodeSeen||0):0;
+        if(!alEntry && malT?.mediaId){
+          alEntry=malMap[malT.mediaId]||null;
+          if(alEntry) progress=Math.round(malT.lastEpisodeSeen||0);
+        }
+        if(!alEntry && title){
+          const res=await searchAL(title,1,1);
+          alEntry=res?.[0]||null;
+          if(alEntry) progress=entry.episodeCount||0;
+          await new Promise(r=>setTimeout(r,250));
+        }
+        if(alEntry){
+          if(!S.favorites.find(f=>f.id===alEntry.id)){
+            S.favorites.push({id:alEntry.id,title:T(alEntry),cover:cover(alEntry),ts:Date.now()});
+          }
+          if(progress>0&&!S.history.find(h=>h.id===alEntry.id)){
+            S.history.push({id:alEntry.id,ep:progress,ts:Date.now(),title:T(alEntry),cover:cover(alEntry),total:alEntry.episodes||0});
+          }
+          if(S.alToken&&!S.alListCache[alEntry.id]){
+            const rawStatus=(alT?.status||malT?.status||0);
+            const alStatus={1:'CURRENT',2:'COMPLETED',3:'PAUSED',4:'DROPPED',5:'PLANNING',6:'PLANNING'}[rawStatus]||'PLANNING';
+            syncToAL(alEntry.id,alStatus,progress).catch(()=>{});
+          }
+          resolved++;
+        }
+      }catch(e){console.warn('[Tachi import]',title,e.message);}
+      const pct=Math.round(((idx+1)/total)*100);
+      if(progFill) progFill.style.width=pct+'%';
+      if(status) status.textContent=`Importing ${idx+1} / ${total} — ${resolved} resolved...`;
+    }
+    S.favorites=S.favorites.slice(0,500);
+    S.history=S.history.slice(0,500);
+    setLS('aniFavs',S.favorites);
+    setLS('aniHistory',S.history);
+    if(progFill) progFill.style.width='100%';
+    if(status) status.textContent=`✓ Done — imported ${resolved} of ${total} entries`;
+    toast(`Imported ${resolved} from Aniyomi backup`,'ok');
+  })();
 }
-
-
 function exportList(){
   const data={favorites:S.favorites,history:S.history,watched:S.watched};
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
