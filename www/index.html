@@ -4407,13 +4407,13 @@ function openImport(){
           ondrop="handleMalDrop(event)">
           Click or drag MAL XML file here
         </div>
-        <input type="file" id="mal-file" accept=".xml" style="display:none" onchange="handleMalFile(event)">
+        <input type="file" id="mal-file" accept=".xml,text/xml,application/xml,text/plain" style="display:none" onchange="handleMalFile(event)">
         <div id="mal-status" style="font-size:12px;color:var(--text2);margin-top:8px"></div>
       </div>
 
       <div class="import-section">
         <h3>Tachiyomi / Aniyomi</h3>
-        <p>Upload a <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px">.tachibk</code> backup or a <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px">.json</code> export from Tachiyomi or Aniyomi.</p>
+        <p>Upload a <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px">.tachibk</code> / <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px">.bin</code> backup or a <code style="background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px">.json</code> export from Tachiyomi or Aniyomi.</p>
         <div class="file-drop"
           onclick="document.getElementById('tachi-file').click()"
           ondragover="event.preventDefault();this.classList.add('drag')"
@@ -4421,7 +4421,7 @@ function openImport(){
           ondrop="handleTachiDrop(event)">
           Click or drag .tachibk / .json file here
         </div>
-        <input type="file" id="tachi-file" accept=".tachibk,.json" style="display:none" onchange="handleTachiFile(event)">
+        <input type="file" id="tachi-file" accept=".tachibk,.bin,.json" style="display:none" onchange="handleTachiFile(event)">
         <div id="tachi-status" style="font-size:12px;color:var(--text2);margin-top:8px"></div>
       </div>
     </div>
@@ -4514,10 +4514,10 @@ function parseMalXML(file){
         imported++;
       }
       setLS('aniMalPending',S._malPending);
-      // Try to resolve first 20 immediately
-      if(status) status.textContent=`Resolving ${Math.min(imported,20)} of ${imported}...`;
+      // Resolve all entries
+      if(status) status.textContent=`Resolving ${imported} entries...`;
       let resolved=0;
-      for(const item of (S._malPending||[]).slice(0,20)){
+      for(const item of (S._malPending||[])){
         try{
           const results=await searchAL(item.title,1,1);
           if(results?.[0]){
@@ -4533,8 +4533,8 @@ function parseMalXML(file){
         }catch{}
         await new Promise(r=>setTimeout(r,300)); // rate limit
       }
-      S.favorites=S.favorites.slice(0,200);
-      S.history=S.history.slice(0,50);
+      S.favorites=S.favorites.slice(0,500);
+      S.history=S.history.slice(0,500);
       setLS('aniFavs',S.favorites);
       setLS('aniHistory',S.history);
       if(status) status.textContent=`✓ Imported ${resolved} / ${imported} anime from MAL`;
@@ -4562,8 +4562,8 @@ async function parseTachiBackup(file){
   if(status) status.textContent='Reading file...';
   try{
     const name=file.name.toLowerCase();
-    if(!name.endsWith('.tachibk') && !name.endsWith('.proto.gz') && !name.endsWith('.json')){
-      throw new Error('Unsupported file type. Please upload a .tachibk file from Aniyomi.');
+    if(!name.endsWith('.tachibk') && !name.endsWith('.proto.gz') && !name.endsWith('.json') && !name.endsWith('.bin')){
+      throw new Error('Unsupported file type. Please upload a .tachibk or .bin file from Aniyomi.');
     }
     if(name.endsWith('.json')){
       const jsonData=JSON.parse(await file.text());
